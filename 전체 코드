@@ -1,0 +1,109 @@
+import concurrent.futures
+from multiprocessing import Pipe
+
+def wave_simulation_task(conn):
+    import numpy as np
+    import matplotlib.pyplot as plt
+    import matplotlib.animation as animation
+
+    def wave_simulation(x, y, time, wind_speed, atmospheric_pressure, density_factor=0.3, terrain_factor=0.1):
+        # 바람, 기압, 밀도, 지형 영향을 고려한 파도 모델링
+        wave = np.sin(2 * np.pi * (x - time)) * np.sin(2 * np.pi * (y - time))
+        wave *= np.exp(-0.7 * wind_speed * (x + y))
+        wave *= np.sin(0.3 * atmospheric_pressure * (x - y))
+        wave *= np.exp(-density_factor * (x ** 2 + y ** 2))
+        wave *= np.exp(-terrain_factor * np.sin(x) * np.sin(y))
+        return wave
+
+    def animate_wave(frame):
+        nonlocal X, Y, time, wind_speed, atmospheric_pressure, density_factor, terrain_factor
+        wave_data = wave_simulation(X, Y, time, wind_speed, atmospheric_pressure, density_factor, terrain_factor)
+        time += 0.1  # 시간 증가량
+        ax.clear()
+        ax.set_title(f"Wave Simulation (Time: {time:.1f})")
+        ax.set_xlabel("X-axis")
+        ax.set_ylabel("Y-axis")
+        ax.set_zlabel("Amplitude")
+        ax.plot_surface(X, Y, wave_data, cmap='viridis')
+
+    # 입력값 받기
+    wind_speed, atmospheric_pressure, density_factor, terrain_factor = conn.recv()
+
+    # 그래프 초기화
+    fig = plt.figure()
+    ax = fig.add_subplot(111, projection='3d')
+
+    x = np.linspace(-10, 10, 100)
+    y = np.linspace(-10, 10, 100)
+    X, Y = np.meshgrid(x, y)
+
+    time = 0.0
+
+    ani = animation.FuncAnimation(fig, animate_wave, interval=100)
+
+    plt.show()
+
+
+def rl_agent_task(conn):
+    import gym
+    import numpy as np
+    from stable_baselines3 import PPO
+    from stable_baselines3.common.vec_env import DummyVecEnv
+
+    class WaveEnvironment(gym.Env):
+        def __init__(self):
+            super(WaveEnvironment, self).__init__()
+            self.observation_space = gym.spaces.Box(low=-1, high=1, shape=(1,), dtype=np.float32)
+            self.action_space = gym.spaces.Box(low=-1, high=1, shape=(1,), dtype=np.float32)
+            self.current_amplitude = 0.5  # Initial amplitude
+
+        def step(self, action):
+            # 적절한 보상 함수 정의
+            reward = -np.abs(self.current_amplitude - action[0])
+
+            # 파도의 진폭 업데이트
+            self.current_amplitude = action[0]
+
+            # 상태, 보상, 종료 여부, 기타 정보 반환
+            return np.array([self.current_amplitude]), reward, False, {}
+
+        def reset(self):
+            # 환경 초기화
+            self.current_amplitude = 0.5
+            return np.array([self.current_amplitude])
+
+        def render(self, mode='human'):
+            # render 모드가 human인 경우에만 출력
+            if mode == 'human':
+                print(f"Current Amplitude: {self.current_amplitude}")
+
+    # 입력값 받기
+    env_params = conn.recv()
+
+    env = DummyVecEnv([lambda: WaveEnvironment()])
+
+    model = PPO("MlpPolicy", env, verbose=1)
+    model.learn(total_timesteps=10000)
+
+    obs = env.reset()
+    for _ in range(1000):
+        action, _states = model.predict(obs)
+        obs, rewards, dones, info = env.step(action)
+
+
+if __name__ == "__main__":
+    # 파이프 생성
+    parent_conn, child_conn = Pipe()
+
+    with concurrent.futures.ProcessPoolExecutor() as executor:
+        # 각 작업을 병렬로 실행
+        future_wave = executor.submit(wave_simulation_task, child_conn)
+        future_rl = executor.submit(rl_agent_task, parent_conn)
+
+        # 각 작업에 필요한 입력값 전달
+        wave_params = (2.0, 101.3, 0.3, 0.1)  # 예시 값, 실제로 사용할 값으로 변경
+        parent_conn.send(wave_params)
+
+        # 결과를 기다리기
+        result_wave = future_wave.result()
+        result_rl = future_rl.result()
