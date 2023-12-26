@@ -77,7 +77,7 @@ def rl_agent_task(conn):
             if mode == 'human':
                 print(f"Current Amplitude: {self.current_amplitude}")
 
-    # 입력값 받기
+    # 입력값
     env_params = conn.recv()
 
     env = DummyVecEnv([lambda: WaveEnvironment()])
@@ -104,6 +104,6 @@ if __name__ == "__main__":
         wave_params = (2.0, 101.3, 0.3, 0.1)  # 예시 값, 실제로 사용할 값으로 변경
         parent_conn.send(wave_params)
 
-        # 결과를 기다리기
+        # 결과
         result_wave = future_wave.result()
         result_rl = future_rl.result()
